@@ -318,6 +318,10 @@ namespace AbbreviationWordAddin
                     {
                         // Get document reference on UI thread
                         doc = this.Application.ActiveDocument;
+                        this.Application.ScreenUpdating = false; // Disable screen updating to prevent flickering
+                        this.Application.DisplayStatusBar = false; // Disable status bar updates
+                        this.Application.Options.ReplaceSelection = false; // Disable selection replacement
+                        this.Application.Visible = false; // Hide the application window
                     }, null);
 
                     // Initialize AutoCorrect cache if needed
@@ -343,7 +347,7 @@ namespace AbbreviationWordAddin
                     {
                         currentChunk++;
                         int endIndex = Math.Min(startIndex + CHUNK_SIZE - 1, totalWords);
-                        
+
                         // Update progress
                         int percentage = (currentChunk * 100) / totalChunks;
                         progressForm.UpdateProgress(percentage, $"Processing chunk {currentChunk} of {totalChunks}...");
@@ -425,6 +429,14 @@ namespace AbbreviationWordAddin
                 }
                 finally
                 {
+                    syncContext.Send(_ =>
+                    {
+                        this.Application.ScreenUpdating = true; // Re-enable screen updating
+                        this.Application.DisplayStatusBar = true; // Re-enable status bar updates
+                        this.Application.Options.ReplaceSelection = true; // Re-enable selection replacement
+                        this.Application.Visible = true; // Show the application window
+                    }, null);
+
                     completed = true;
                     syncContext.Post(_ => progressForm.Close(), null);
                 }
