@@ -139,7 +139,7 @@ namespace AbbreviationWordAddin
 
                 using (var package = new ExcelPackage(stream))
                 {
-                    ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+                    //ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
                     ExcelWorksheet worksheet = package.Workbook.Worksheets[0]; // First sheet
                     int rowCount = worksheet.Dimension.Rows;
 
