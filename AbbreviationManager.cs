@@ -1,9 +1,9 @@
-﻿﻿﻿﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Xml.Serialization;
+using Newtonsoft.Json;
 using OfficeOpenXml;  // EPPlus Library
 
 namespace AbbreviationWordAddin
@@ -16,44 +16,8 @@ namespace AbbreviationWordAddin
         private static string cacheFilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "AbbreviationWordAddin",
-            "abbreviations.xml"
+            "abbreviations.json"
         );
-
-        // Helper class for XML serialization of dictionary
-        [XmlRoot("Abbreviations")]
-        public class SerializableDictionary
-        {
-            [XmlArray("Items")]
-            [XmlArrayItem("Item")]
-            public List<DictionaryItem> Items { get; set; }
-
-            public SerializableDictionary()
-            {
-                Items = new List<DictionaryItem>();
-            }
-
-            public Dictionary<string, string> ToDictionary()
-            {
-                return Items.ToDictionary(item => item.Key, item => item.Value);
-            }
-
-            public static SerializableDictionary FromDictionary(Dictionary<string, string> dict)
-            {
-                return new SerializableDictionary
-                {
-                    Items = dict.Select(kvp => new DictionaryItem { Key = kvp.Key, Value = kvp.Value }).ToList()
-                };
-            }
-        }
-
-        public class DictionaryItem
-        {
-            [XmlAttribute("Key")]
-            public string Key { get; set; }
-
-            [XmlAttribute("Value")]
-            public string Value { get; set; }
-        }
 
         // Initialize AutoCorrect cache
         public static void InitializeAutoCorrectCache(Microsoft.Office.Interop.Word.AutoCorrect autoCorrect)
@@ -116,16 +80,13 @@ namespace AbbreviationWordAddin
                     return false;
                 }
 
-                using (var reader = new StreamReader(cacheFilePath))
+                string jsonContent = File.ReadAllText(cacheFilePath);
+                var loadedDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(jsonContent);
+                
+                if (loadedDict != null && loadedDict.Count > 0)
                 {
-                    var serializer = new XmlSerializer(typeof(SerializableDictionary));
-                    var serializableDict = (SerializableDictionary)serializer.Deserialize(reader);
-                    
-                    if (serializableDict?.Items != null && serializableDict.Items.Count > 0)
-                    {
-                        abbreviationDict = serializableDict.ToDictionary();
-                        return true;
-                    }
+                    abbreviationDict = loadedDict;
+                    return true;
                 }
                 return false;
             }
@@ -149,12 +110,8 @@ namespace AbbreviationWordAddin
                 }
 
                 // Serialize and save
-                using (var writer = new StreamWriter(cacheFilePath))
-                {
-                    var serializer = new XmlSerializer(typeof(SerializableDictionary));
-                    var serializableDict = SerializableDictionary.FromDictionary(abbreviationDict);
-                    serializer.Serialize(writer, serializableDict);
-                }
+                string jsonContent = JsonConvert.SerializeObject(abbreviationDict, Formatting.Indented);
+                File.WriteAllText(cacheFilePath, jsonContent);
             }
             catch (Exception ex)
             {

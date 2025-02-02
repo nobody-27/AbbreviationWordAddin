@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -8,6 +8,7 @@ using Office = Microsoft.Office.Core;
 using Microsoft.Office.Tools.Word;
 using Microsoft.Office.Interop.Word;
 using System.Diagnostics;
+using Action = System.Action; // Explicitly use System.Action to resolve ambiguity
 
 namespace AbbreviationWordAddin
 {
@@ -154,68 +155,85 @@ namespace AbbreviationWordAddin
         /// </summary>
         public void ReplaceAllAbbreviations()
         {
-            Word.Document doc = this.Application.ActiveDocument;
-            
-            try
+            var progressForm = new ProgressForm();
+            var processThread = new System.Threading.Thread(() =>
             {
-                // Initialize AutoCorrect cache if needed
-                if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
-                {
-                    AbbreviationManager.InitializeAutoCorrectCache(this.Application.AutoCorrect);
-                }
-
-                // Get total words in document
-                int totalWords = doc.Words.Count;
+                Word.Document doc = this.Application.ActiveDocument;
                 
-                // Process document in chunks
-                for (int startIndex = 1; startIndex <= totalWords; startIndex += CHUNK_SIZE)
+                try
                 {
-                    int endIndex = Math.Min(startIndex + CHUNK_SIZE - 1, totalWords);
-                    Word.Range chunkRange = doc.Range(doc.Words[startIndex].Start, doc.Words[endIndex].End);
-                    
-                    // Store the chunk text
-                    string chunkText = chunkRange.Text;
-                    bool hasMatches = false;
-
-                    // Quick check if chunk contains any potential matches
-                    foreach (var phrase in AbbreviationManager.GetAllPhrases())
+                    // Initialize AutoCorrect cache if needed
+                    if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
                     {
-                        if (chunkText.Contains(phrase))
-                        {
-                            hasMatches = true;
-                            break;
-                        }
+                        AbbreviationManager.InitializeAutoCorrectCache(this.Application.AutoCorrect);
                     }
 
-                    // Only process chunk if it contains potential matches
-                    if (hasMatches)
+                    // Get total words in document
+                    int totalWords = doc.Words.Count;
+                    int totalChunks = (totalWords + CHUNK_SIZE - 1) / CHUNK_SIZE;
+                    int currentChunk = 0;
+                    
+                    // Process document in chunks
+                    for (int startIndex = 1; startIndex <= totalWords; startIndex += CHUNK_SIZE)
                     {
+                        currentChunk++;
+                        int endIndex = Math.Min(startIndex + CHUNK_SIZE - 1, totalWords);
+                        Word.Range chunkRange = doc.Range(doc.Words[startIndex].Start, doc.Words[endIndex].End);
+                        
+                        // Update progress
+                        int percentage = (currentChunk * 100) / totalChunks;
+                        progressForm.UpdateProgress(percentage, $"Processing chunk {currentChunk} of {totalChunks}...");
+
+                        // Store the chunk text
+                        string chunkText = chunkRange.Text;
+                        bool hasMatches = false;
+
+                        // Quick check if chunk contains any potential matches
                         foreach (var phrase in AbbreviationManager.GetAllPhrases())
                         {
-                            // Try to get from cache first
-                            string replacement = AbbreviationManager.GetFromAutoCorrectCache(phrase);
-                            if (replacement == null)
-                            {
-                                replacement = AbbreviationManager.GetAbbreviation(phrase);
-                            }
-
                             if (chunkText.Contains(phrase))
                             {
-                                var find = chunkRange.Find;
-                                find.ClearFormatting();
-                                find.Text = phrase;
-                                find.Replacement.ClearFormatting();
-                                find.Replacement.Text = replacement;
-                                find.Execute(Replace: Word.WdReplace.wdReplaceAll);
+                                hasMatches = true;
+                                break;
+                            }
+                        }
+
+                        // Only process chunk if it contains potential matches
+                        if (hasMatches)
+                        {
+                            foreach (var phrase in AbbreviationManager.GetAllPhrases())
+                            {
+                                // Try to get from cache first
+                                string replacement = AbbreviationManager.GetFromAutoCorrectCache(phrase);
+                                if (replacement == null)
+                                {
+                                    replacement = AbbreviationManager.GetAbbreviation(phrase);
+                                }
+
+                                if (chunkText.Contains(phrase))
+                                {
+                                    var find = chunkRange.Find;
+                                    find.ClearFormatting();
+                                    find.Text = phrase;
+                                    find.Replacement.ClearFormatting();
+                                    find.Replacement.Text = replacement;
+                                    find.Execute(Replace: Word.WdReplace.wdReplaceAll);
+                                }
                             }
                         }
                     }
+
+                    progressForm.Invoke((Action)(() => progressForm.Close()));
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Windows.Forms.MessageBox.Show("Error during replacement: " + ex.Message, "Error");
-            }
+                catch (Exception ex)
+                {
+                    progressForm.Invoke((Action)(() => progressForm.Close()));
+                    System.Windows.Forms.MessageBox.Show("Error during replacement: " + ex.Message, "Error");
+                }
+            });
+
+            processThread.Start();
+            progressForm.ShowDialog();
         }
 
         /// <summary>
@@ -223,61 +241,78 @@ namespace AbbreviationWordAddin
         /// </summary>
         public void HighlightAllAbbreviations()
         {
-            Word.Document doc = this.Application.ActiveDocument;
-            
-            try
+            var progressForm = new ProgressForm();
+            var processThread = new System.Threading.Thread(() =>
             {
-                // Initialize AutoCorrect cache if needed
-                if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
-                {
-                    AbbreviationManager.InitializeAutoCorrectCache(this.Application.AutoCorrect);
-                }
-
-                // Get total words in document
-                int totalWords = doc.Words.Count;
+                Word.Document doc = this.Application.ActiveDocument;
                 
-                // Process document in chunks
-                for (int startIndex = 1; startIndex <= totalWords; startIndex += CHUNK_SIZE)
+                try
                 {
-                    int endIndex = Math.Min(startIndex + CHUNK_SIZE - 1, totalWords);
-                    Word.Range chunkRange = doc.Range(doc.Words[startIndex].Start, doc.Words[endIndex].End);
-                    
-                    // Store the chunk text
-                    string chunkText = chunkRange.Text;
-                    bool hasMatches = false;
-
-                    // Quick check if chunk contains any potential matches
-                    foreach (var phrase in AbbreviationManager.GetAllPhrases())
+                    // Initialize AutoCorrect cache if needed
+                    if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
                     {
-                        if (chunkText.Contains(phrase))
-                        {
-                            hasMatches = true;
-                            break;
-                        }
+                        AbbreviationManager.InitializeAutoCorrectCache(this.Application.AutoCorrect);
                     }
 
-                    // Only process chunk if it contains potential matches
-                    if (hasMatches)
+                    // Get total words in document
+                    int totalWords = doc.Words.Count;
+                    int totalChunks = (totalWords + CHUNK_SIZE - 1) / CHUNK_SIZE;
+                    int currentChunk = 0;
+                    
+                    // Process document in chunks
+                    for (int startIndex = 1; startIndex <= totalWords; startIndex += CHUNK_SIZE)
                     {
+                        currentChunk++;
+                        int endIndex = Math.Min(startIndex + CHUNK_SIZE - 1, totalWords);
+                        Word.Range chunkRange = doc.Range(doc.Words[startIndex].Start, doc.Words[endIndex].End);
+                        
+                        // Update progress
+                        int percentage = (currentChunk * 100) / totalChunks;
+                        progressForm.UpdateProgress(percentage, $"Processing chunk {currentChunk} of {totalChunks}...");
+
+                        // Store the chunk text
+                        string chunkText = chunkRange.Text;
+                        bool hasMatches = false;
+
+                        // Quick check if chunk contains any potential matches
                         foreach (var phrase in AbbreviationManager.GetAllPhrases())
                         {
                             if (chunkText.Contains(phrase))
                             {
-                                var find = chunkRange.Find;
-                                find.ClearFormatting();
-                                find.Text = phrase;
-                                find.Replacement.ClearFormatting();
-                                find.Replacement.Font.Color = Word.WdColor.wdColorRed;
-                                find.Execute(Replace: Word.WdReplace.wdReplaceAll);
+                                hasMatches = true;
+                                break;
+                            }
+                        }
+
+                        // Only process chunk if it contains potential matches
+                        if (hasMatches)
+                        {
+                            foreach (var phrase in AbbreviationManager.GetAllPhrases())
+                            {
+                                if (chunkText.Contains(phrase))
+                                {
+                                    var find = chunkRange.Find;
+                                    find.ClearFormatting();
+                                    find.Text = phrase;
+                                    find.Replacement.ClearFormatting();
+                                    find.Replacement.Font.Color = Word.WdColor.wdColorRed;
+                                    find.Execute(Replace: Word.WdReplace.wdReplaceAll);
+                                }
                             }
                         }
                     }
+
+                    progressForm.Invoke((Action)(() => progressForm.Close()));
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Windows.Forms.MessageBox.Show("Error during highlighting: " + ex.Message, "Error");
-            }
+                catch (Exception ex)
+                {
+                    progressForm.Invoke((Action)(() => progressForm.Close()));
+                    System.Windows.Forms.MessageBox.Show("Error during highlighting: " + ex.Message, "Error");
+                }
+            });
+
+            processThread.Start();
+            progressForm.ShowDialog();
         }
 
         #region VSTO generated code
