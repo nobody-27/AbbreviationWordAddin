@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿﻿﻿﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -14,39 +14,63 @@ namespace AbbreviationWordAddin
     public partial class ThisAddIn
     {
         public bool abbreviationEnabled = false; // Enable abbreviation replacement by default
-        private KeyboardHook keyboardHook;
-        public Dictionary<string, string> abbreviations;
+        private const int CHUNK_SIZE = 1000; // Process 1000 words at a time
 
         private void ThisAddIn_Startup(object sender, System.EventArgs e)
         {
             this.Application.WindowSelectionChange += Application_WindowSelectionChange;
 
-            AbbreviationManager.LoadAbbreviations();
-
-            var application = Globals.ThisAddIn.Application;
-            AutoCorrect autoCorrect = application.AutoCorrect;
-            if (autoCorrect.Equals(true)) {
-                abbreviationEnabled = false;
-            }
-            else
+            try
             {
-                abbreviationEnabled = true;
+                // Load abbreviations from cache or Excel
+                AbbreviationManager.LoadAbbreviations();
+
+                var application = Globals.ThisAddIn.Application;
+                AutoCorrect autoCorrect = application.AutoCorrect;
+                
+                // Set initial state based on AutoCorrect settings
+                abbreviationEnabled = autoCorrect.ReplaceText;
+
+                // Initialize AutoCorrect cache
+                AbbreviationManager.InitializeAutoCorrectCache(autoCorrect);
+
+                // Add each abbreviation to AutoCorrect if enabled
+                if (abbreviationEnabled)
+                {
+                    foreach (var abbreviation in AbbreviationManager.GetAllPhrases())
+                    {
+                        try
+                        {
+                            string fullForm = AbbreviationManager.GetAbbreviation(abbreviation);
+                            if (!string.IsNullOrEmpty(fullForm))
+                            {
+                                autoCorrect.ReplaceText = true;
+                                autoCorrect.Entries.Add(abbreviation, fullForm);
+                            }
+                        }
+                        catch (System.Runtime.InteropServices.COMException)
+                        {
+                            // Skip if entry already exists
+                            continue;
+                        }
+                    }
+                }
             }
-
-            // Add each abbreviation to AutoCorrect
-            foreach (var abbreviation in AbbreviationManager.GetAllPhrases())
+            catch (Exception ex)
             {
-                // Get the abbreviation and its full form
-                string fullForm = AbbreviationManager.GetAbbreviation(abbreviation);
-
-                // Add the abbreviation to AutoCorrect
-                this.Application.AutoCorrect.ReplaceText = true; // Ensure AutoCorrect replacement is enabled
-                this.Application.AutoCorrect.Entries.Add(abbreviation, fullForm); // Add abbreviation and replacement
+                System.Windows.Forms.MessageBox.Show(
+                    "Error during startup: " + ex.Message,
+                    "Startup Error",
+                    System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Warning
+                );
             }
         }
 
         private void ThisAddIn_Shutdown(object sender, System.EventArgs e)
         {
+            // Clear cache on shutdown
+            AbbreviationManager.ClearAutoCorrectCache();
         }
 
         /// <summary>
@@ -56,7 +80,13 @@ namespace AbbreviationWordAddin
         {
             if (abbreviationEnabled && sel != null && sel.Text.Length > 3)  // Avoid replacing single characters
             {
-                string replacement = AbbreviationManager.GetAbbreviation(sel.Text.Trim());
+                // Try cache first
+                string replacement = AbbreviationManager.GetFromAutoCorrectCache(sel.Text.Trim());
+                if (replacement == null)
+                {
+                    replacement = AbbreviationManager.GetAbbreviation(sel.Text.Trim());
+                }
+                
                 if (replacement != sel.Text.Trim())
                 {
                     sel.Text = replacement; // Replace text in document
@@ -74,8 +104,22 @@ namespace AbbreviationWordAddin
                     Word.Range selectionRange = doc.Application.Selection.Range;
                     string text = selectionRange.Text.Trim();
 
-                    Application.AutoCorrect.ReplaceText = true; // Enable AutoCorrect
-                    selectionRange.Text = abbreviations[text]; // Replace with abbreviation
+                    // Try cache first
+                    string replacement = AbbreviationManager.GetFromAutoCorrectCache(text);
+                    if (replacement != null)
+                    {
+                        Application.AutoCorrect.ReplaceText = true;
+                        selectionRange.Text = replacement;
+                    }
+                    else
+                    {
+                        string abbrev = AbbreviationManager.GetAbbreviation(text);
+                        if (abbrev != text) // Only replace if there's a match
+                        {
+                            Application.AutoCorrect.ReplaceText = true;
+                            selectionRange.Text = abbrev;
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -85,7 +129,6 @@ namespace AbbreviationWordAddin
             }
         }
 
-
         /// <summary>
         /// Enable or disable automatic abbreviation replacement.
         /// </summary>
@@ -94,160 +137,146 @@ namespace AbbreviationWordAddin
             abbreviationEnabled = enable;
             if (abbreviationEnabled)
             {
-                // Optionally, update the UI or status to indicate the feature is enabled
+                // Initialize cache when enabling
+                AbbreviationManager.InitializeAutoCorrectCache(this.Application.AutoCorrect);
                 System.Windows.Forms.MessageBox.Show("Abbreviation Replacement Enabled", "Status");
             }
             else
             {
-                // Optionally, update the UI or status to indicate the feature is disabled
+                // Clear cache when disabling
+                AbbreviationManager.ClearAutoCorrectCache();
                 System.Windows.Forms.MessageBox.Show("Abbreviation Replacement Disabled", "Status");
             }
         }
 
         /// <summary>
-        /// Replace all abbreviations in the active document at once.
+        /// Replace all abbreviations in the active document at once using optimized chunk processing.
         /// </summary>
         public void ReplaceAllAbbreviations()
         {
             Word.Document doc = this.Application.ActiveDocument;
-            Word.Range range = doc.Content;
-            foreach (var phrase in AbbreviationManager.GetAllPhrases())
-            {
-                string abbreviation = AbbreviationManager.GetAbbreviation(phrase);
-                range.Find.Execute(FindText: phrase, ReplaceWith: abbreviation, Replace: Word.WdReplace.wdReplaceAll);
-            }
-        }
-
-        public void ReplaceAutoCorrectAbbreviationsInWord()
-        {
-            var application = Globals.ThisAddIn.Application;
-            var activeDocument = application.ActiveDocument;
-
+            
             try
             {
-                // Access the AutoCorrect object
-                AutoCorrect autoCorrect = application.AutoCorrect;
-
-                // Create a list of abbreviations and full forms
-                var replacements = new List<Tuple<string, string>>();
-
-                // Loop through each AutoCorrect entry
-                for (int i = 1; i <= autoCorrect.Entries.Count; i++)
+                // Initialize AutoCorrect cache if needed
+                if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
                 {
-                    string abbreviation = autoCorrect.Entries[i].Name;
-                    string fullForm = autoCorrect.Entries[i].Value;
+                    AbbreviationManager.InitializeAutoCorrectCache(this.Application.AutoCorrect);
+                }
 
-                    // Only add to the list if both abbreviation and full form are not empty
-                    if (!string.IsNullOrEmpty(abbreviation) && !string.IsNullOrEmpty(fullForm))
+                // Get total words in document
+                int totalWords = doc.Words.Count;
+                
+                // Process document in chunks
+                for (int startIndex = 1; startIndex <= totalWords; startIndex += CHUNK_SIZE)
+                {
+                    int endIndex = Math.Min(startIndex + CHUNK_SIZE - 1, totalWords);
+                    Word.Range chunkRange = doc.Range(doc.Words[startIndex].Start, doc.Words[endIndex].End);
+                    
+                    // Store the chunk text
+                    string chunkText = chunkRange.Text;
+                    bool hasMatches = false;
+
+                    // Quick check if chunk contains any potential matches
+                    foreach (var phrase in AbbreviationManager.GetAllPhrases())
                     {
-                        replacements.Add(new Tuple<string, string>(abbreviation, fullForm));
+                        if (chunkText.Contains(phrase))
+                        {
+                            hasMatches = true;
+                            break;
+                        }
+                    }
+
+                    // Only process chunk if it contains potential matches
+                    if (hasMatches)
+                    {
+                        foreach (var phrase in AbbreviationManager.GetAllPhrases())
+                        {
+                            // Try to get from cache first
+                            string replacement = AbbreviationManager.GetFromAutoCorrectCache(phrase);
+                            if (replacement == null)
+                            {
+                                replacement = AbbreviationManager.GetAbbreviation(phrase);
+                            }
+
+                            if (chunkText.Contains(phrase))
+                            {
+                                var find = chunkRange.Find;
+                                find.ClearFormatting();
+                                find.Text = phrase;
+                                find.Replacement.ClearFormatting();
+                                find.Replacement.Text = replacement;
+                                find.Execute(Replace: Word.WdReplace.wdReplaceAll);
+                            }
+                        }
                     }
                 }
-
-                // Perform replacements in a single pass using Find.Execute
-                foreach (var replacement in replacements)
-                {
-                    // Clear previous Find settings
-                    var find = activeDocument.Content.Find;
-                    find.ClearFormatting();
-                    find.Replacement.ClearFormatting();
-                    find.Text = replacement.Item1;
-                    find.Replacement.Text = replacement.Item2;
-
-                    // Execute Find and Replace
-                    find.Execute(
-                        FindText: replacement.Item1,
-                        ReplaceWith: replacement.Item2,
-                        Replace: Microsoft.Office.Interop.Word.WdReplace.wdReplaceAll
-                    );
-                }
-
-                System.Windows.Forms.MessageBox.Show("All AutoCorrect abbreviations replaced!", "Success");
             }
             catch (Exception ex)
             {
-                System.Windows.Forms.MessageBox.Show("Error: " + ex.Message, "AutoCorrect Abbreviation Replacement Error");
+                System.Windows.Forms.MessageBox.Show("Error during replacement: " + ex.Message, "Error");
             }
-        }
-
-        private void FindAndReplace(Microsoft.Office.Interop.Word.Document document, string findText, string replaceText)
-        {
-            // Use the Find and Replace functionality
-            var find = document.Content.Find;
-
-            find.ClearFormatting();
-            find.Text = findText;
-            find.Replacement.ClearFormatting();
-            find.Replacement.Text = replaceText;
-
-            // Replace all occurrences in the entire document
-            find.Execute(FindText: findText, ReplaceWith: replaceText, Replace: Microsoft.Office.Interop.Word.WdReplace.wdReplaceAll);
-        }
-
-        public void HighlightAutoCorrectAbbreviationsInWord()
-        {
-            var application = Globals.ThisAddIn.Application;
-            var activeDocument = application.ActiveDocument;
-
-            try
-            {
-                // Access the AutoCorrect object
-                AutoCorrect autoCorrect = application.AutoCorrect;
-
-                // Loop through each AutoCorrect entry
-                for (int i = 1; i <= autoCorrect.Entries.Count; i++)
-                {
-                    string abbreviation = autoCorrect.Entries[i].Name;
-                    string fullForm = autoCorrect.Entries[i].Value;
-
-                    // Only highlight if abbreviation is not empty
-                    if (!string.IsNullOrEmpty(abbreviation) && !string.IsNullOrEmpty(fullForm))
-                    {
-                        // Use Find and Highlight for each abbreviation
-                        HighlightTextInDocument(activeDocument, abbreviation);
-                    }
-                }
-
-                System.Windows.Forms.MessageBox.Show("All AutoCorrect abbreviations highlighted!", "Success");
-            }
-            catch (Exception ex)
-            {
-                System.Windows.Forms.MessageBox.Show("Error: " + ex.Message, "AutoCorrect Abbreviation Highlight Error");
-            }
-        }
-
-        private void HighlightTextInDocument(Microsoft.Office.Interop.Word.Document document, string findText)
-        {
-            // Use the Find functionality to search for the abbreviation
-            var find = document.Content.Find;
-
-            find.ClearFormatting();
-            find.Text = findText;
-
-            // Set formatting to highlight found text with a custom color
-            find.Replacement.ClearFormatting();
-            find.Replacement.Highlight = 1; // Enable Highlight
-            find.Replacement.Font.Shading.BackgroundPatternColor = Microsoft.Office.Interop.Word.WdColor.wdColorGreen; // Green highlight
-
-            // Highlight all occurrences in the entire document
-            find.Execute(FindText: findText, ReplaceWith: findText, Replace: Microsoft.Office.Interop.Word.WdReplace.wdReplaceAll);
         }
 
         /// <summary>
-        /// Highlight all abbreviations in red in the document.
+        /// Highlight all abbreviations in the document using optimized chunk processing.
         /// </summary>
         public void HighlightAllAbbreviations()
         {
             Word.Document doc = this.Application.ActiveDocument;
-            Word.Range range = doc.Content;
-            foreach (var phrase in AbbreviationManager.GetAllPhrases())
+            
+            try
             {
-                Word.Find find = range.Find;
-                find.ClearFormatting();
-                find.Text = phrase;
-                find.Replacement.ClearFormatting();
-                find.Replacement.Font.Color = Word.WdColor.wdColorRed;
-                find.Execute(Replace: Word.WdReplace.wdReplaceAll);
+                // Initialize AutoCorrect cache if needed
+                if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
+                {
+                    AbbreviationManager.InitializeAutoCorrectCache(this.Application.AutoCorrect);
+                }
+
+                // Get total words in document
+                int totalWords = doc.Words.Count;
+                
+                // Process document in chunks
+                for (int startIndex = 1; startIndex <= totalWords; startIndex += CHUNK_SIZE)
+                {
+                    int endIndex = Math.Min(startIndex + CHUNK_SIZE - 1, totalWords);
+                    Word.Range chunkRange = doc.Range(doc.Words[startIndex].Start, doc.Words[endIndex].End);
+                    
+                    // Store the chunk text
+                    string chunkText = chunkRange.Text;
+                    bool hasMatches = false;
+
+                    // Quick check if chunk contains any potential matches
+                    foreach (var phrase in AbbreviationManager.GetAllPhrases())
+                    {
+                        if (chunkText.Contains(phrase))
+                        {
+                            hasMatches = true;
+                            break;
+                        }
+                    }
+
+                    // Only process chunk if it contains potential matches
+                    if (hasMatches)
+                    {
+                        foreach (var phrase in AbbreviationManager.GetAllPhrases())
+                        {
+                            if (chunkText.Contains(phrase))
+                            {
+                                var find = chunkRange.Find;
+                                find.ClearFormatting();
+                                find.Text = phrase;
+                                find.Replacement.ClearFormatting();
+                                find.Replacement.Font.Color = Word.WdColor.wdColorRed;
+                                find.Execute(Replace: Word.WdReplace.wdReplaceAll);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Windows.Forms.MessageBox.Show("Error during highlighting: " + ex.Message, "Error");
             }
         }
 

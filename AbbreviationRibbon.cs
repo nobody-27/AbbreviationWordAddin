@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using Microsoft.Office.Interop.Word;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -15,6 +15,9 @@ namespace AbbreviationWordAddin
             AutoCorrect autoCorrect = application.AutoCorrect;
             if (autoCorrect.ReplaceText)
             {
+                // Initialize cache on load if enabled
+                AbbreviationManager.InitializeAutoCorrectCache(autoCorrect);
+                
                 Globals.ThisAddIn.ToggleAbbreviationReplacement(true);
                 btnEnable.Enabled = false;  // Disable enable button
                 btnDisable.Enabled = true;  // Enable disable button
@@ -33,33 +36,27 @@ namespace AbbreviationWordAddin
 
         private void btnEnable_Click(object sender, RibbonControlEventArgs e)
         {
-            Globals.ThisAddIn.ToggleAbbreviationReplacement(true);
-
             try
             {
+                var application = Globals.ThisAddIn.Application;
+                AutoCorrect autoCorrect = application.AutoCorrect;
+
+                // Initialize cache before enabling
+                AbbreviationManager.InitializeAutoCorrectCache(autoCorrect);
+                
+                Globals.ThisAddIn.ToggleAbbreviationReplacement(true);
 
                 btnEnable.Enabled = false;  // Disable enable button after click
                 btnDisable.Enabled = true;  // Enable disable button
                 btnEnable.Label = "Enabled"; // Change text to indicate it's clicked
-                                             ////btnEnable.Image = Properties.Resources.enabledIcon; // Optional: Change button icon
                 btnDisable.Label = "Disable"; // Reset disable button text
 
-
-                var application = Globals.ThisAddIn.Application;
-                AutoCorrect autoCorrect = application.AutoCorrect;
-
-
-                autoCorrect.ReplaceText = true; // Disable text replacement
-                autoCorrect.CorrectCapsLock = true; // Disable correction of Caps Lock
-                autoCorrect.CorrectSentenceCaps = true; // Disable sentence capitalization
-                autoCorrect.CorrectInitialCaps = true; // Disable initial capitalization corrections
-                autoCorrect.CorrectHangulAndAlphabet = true; // Disable Hangul corrections, if applicable
-                autoCorrect.OtherCorrectionsAutoAdd = true; // Disable other corrections auto add
-
-
-
-
-                //System.Windows.Forms.MessageBox.Show("Abbreviator has been enabled and abbreviations added!!", "Success");
+                autoCorrect.ReplaceText = true; // Enable text replacement
+                autoCorrect.CorrectCapsLock = true; 
+                autoCorrect.CorrectSentenceCaps = true;
+                autoCorrect.CorrectInitialCaps = true;
+                autoCorrect.CorrectHangulAndAlphabet = true;
+                autoCorrect.OtherCorrectionsAutoAdd = true;
             }
             catch (COMException ex)
             {
@@ -69,29 +66,28 @@ namespace AbbreviationWordAddin
 
         private void btnDisable_Click(object sender, RibbonControlEventArgs e)
         {
-            Globals.ThisAddIn.ToggleAbbreviationReplacement(false);
-
-            btnEnable.Enabled = true;  // Enable enable button
-            btnDisable.Enabled = false; // Disable disable button
-            btnDisable.Label = "Disabled"; // Change text to indicate it's clicked
-                                           //btnDisable.Image = Properties.Resources.disabledIcon; // Optional: Change button icon
-            btnEnable.Label = "Enable"; // Reset enable button text
-
-
             try
             {
                 var application = Globals.ThisAddIn.Application;
                 AutoCorrect autoCorrect = application.AutoCorrect;
 
-                // Disable various AutoCorrect features
+                // Clear cache before disabling
+                AbbreviationManager.ClearAutoCorrectCache();
+                
+                Globals.ThisAddIn.ToggleAbbreviationReplacement(false);
+
+                btnEnable.Enabled = true;  // Enable enable button
+                btnDisable.Enabled = false; // Disable disable button
+                btnDisable.Label = "Disabled"; // Change text to indicate it's clicked
+                btnEnable.Label = "Enable"; // Reset enable button text
 
                 // Disable various AutoCorrect features
-                autoCorrect.ReplaceText = false; // Disable text replacement
-                autoCorrect.CorrectCapsLock = false; // Disable correction of Caps Lock
-                autoCorrect.CorrectSentenceCaps = false; // Disable sentence capitalization
-                autoCorrect.CorrectInitialCaps = false; // Disable initial capitalization corrections
-                autoCorrect.CorrectHangulAndAlphabet = false; // Disable Hangul corrections, if applicable
-                autoCorrect.OtherCorrectionsAutoAdd = false; // Disable other corrections auto add
+                autoCorrect.ReplaceText = false;
+                autoCorrect.CorrectCapsLock = false;
+                autoCorrect.CorrectSentenceCaps = false;
+                autoCorrect.CorrectInitialCaps = false;
+                autoCorrect.CorrectHangulAndAlphabet = false;
+                autoCorrect.OtherCorrectionsAutoAdd = false;
             }
             catch (COMException ex)
             {
@@ -101,16 +97,29 @@ namespace AbbreviationWordAddin
 
         private async void btnReplaceAll_Click(object sender, RibbonControlEventArgs e)
         {
-            //Globals.ThisAddIn.ReplaceAllAbbreviations();
             var button = (RibbonButton)sender;
             button.Enabled = false;  // Disable the button
             button.Label = "Processing...";  // Update text to show processing
 
-            //await System.Threading.Tasks.Task.Run(() => Globals.ThisAddIn.ReplaceAutoCorrectAbbreviationsInWord());
-            await System.Threading.Tasks.Task.Run(() => Globals.ThisAddIn.ReplaceAllAbbreviations());
+            try
+            {
+                // Ensure cache is initialized before processing
+                if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
+                {
+                    AbbreviationManager.InitializeAutoCorrectCache(Globals.ThisAddIn.Application.AutoCorrect);
+                }
 
-            button.Label = "Replace All";  // Reset text
-            button.Enabled = true;  // Re-enable the button
+                await System.Threading.Tasks.Task.Run(() => Globals.ThisAddIn.ReplaceAllAbbreviations());
+            }
+            catch (Exception ex)
+            {
+                System.Windows.Forms.MessageBox.Show("Error during replacement: " + ex.Message, "Error");
+            }
+            finally
+            {
+                button.Label = "Replace All";  // Reset text
+                button.Enabled = true;  // Re-enable the button
+            }
         }
 
         private async void btnHighlightAll_Click(object sender, RibbonControlEventArgs e)
@@ -119,11 +128,25 @@ namespace AbbreviationWordAddin
             button.Enabled = false;  // Disable the button
             button.Label = "Processing...";  // Show processing message
 
-            //await System.Threading.Tasks.Task.Run(() => Globals.ThisAddIn.HighlightAutoCorrectAbbreviationsInWord());
-            await System.Threading.Tasks.Task.Run(() => Globals.ThisAddIn.HighlightAllAbbreviations());
+            try
+            {
+                // Ensure cache is initialized before processing
+                if (!AbbreviationManager.IsAutoCorrectCacheInitialized())
+                {
+                    AbbreviationManager.InitializeAutoCorrectCache(Globals.ThisAddIn.Application.AutoCorrect);
+                }
 
-            button.Label = "Highlight All";  // Reset label
-            button.Enabled = true;  // Re-enable the button
+                await System.Threading.Tasks.Task.Run(() => Globals.ThisAddIn.HighlightAllAbbreviations());
+            }
+            catch (Exception ex)
+            {
+                System.Windows.Forms.MessageBox.Show("Error during highlighting: " + ex.Message, "Error");
+            }
+            finally
+            {
+                button.Label = "Highlight All";  // Reset label
+                button.Enabled = true;  // Re-enable the button
+            }
         }
     }
 }
